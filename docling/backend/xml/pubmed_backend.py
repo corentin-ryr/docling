@@ -454,10 +454,41 @@ class PubMedDocumentBackend(DeclarativeDocumentBackend):
     ):
         """Convert XML element to Node and attach to parent"""
         if element.tag == "p":
-            text = "".join(element.itertext())
+            soup = BeautifulSoup(etree.tostring(element), "xml")
+            formatted_paragraph = ""
+            for p in soup.find_all("p"):
+                for elem in p.children:
+                    print(f"Elem: {elem}, ({elem.name})")
+
+                    if elem.name is None:  # Plain text
+                        formatted_paragraph += elem
+                    elif elem.name == "bold":  # Bold
+                        formatted_paragraph += f"**{elem.text}**"
+                    elif elem.name == "italic":  # Italic
+                        formatted_paragraph += f"*{elem.text}*"
+                    elif elem.name == "xref":  # Reference (keeps the number as is)
+                        formatted_paragraph += f"[{elem.text}]"
+                    elif elem.name == "sub":  # Subscript
+                        formatted_paragraph += f"<sub>{elem.text}</sub>"
+                    elif elem.name == "sup":  # Superscript
+                        formatted_paragraph += f"<sup>{elem.text}</sup>"
+
+            # Remove all subelements with tag xref or italic
+            for subel in element:
+                if subel.tag in ["xref", "italic", "sub", "sup"]:
+                    element.remove(subel)
+
+            # print(text)
+            # print("==============================")
+            # print(formatted_paragraph)
+            # raise Exception
+
             return doc.add_text(
-                text=text, parent=parent_node, label=DocItemLabel.PARAGRAPH
+                text=formatted_paragraph,
+                parent=parent_node,
+                label=DocItemLabel.PARAGRAPH,
             )
+
         elif element.tag == "table-wrap":
             table: Table = {"label": "", "caption": "", "content": ""}
 
@@ -564,29 +595,34 @@ class PubMedDocumentBackend(DeclarativeDocumentBackend):
             # Get the title tag of the section
             title_el = element.find("title")
             title_label = element.find("label")
+
             title_label_text = "" if title_label is None else title_label.text
+            if title_label is not None:
+                element.remove(title_label)
 
             # Create a header node with the text content of the title tag
             if title_el is not None:
+                element.remove(title_el)
                 return doc.add_heading(
                     text=f"{title_label_text} {title_el.text}", parent=parent_node
                 )
 
-        elif (
-            element.tag == "title"
-            or element.tag == "label"
-            or element.tag == "xref"
-            or element.tag == "italic"
-            or element.tag == "sup"
-            or element.tag == "sub"
-            or element.tag == "ext-link"
-            or element.tag == "supplementary-material"
-            or element.tag == "uri"
-            or element.tag == "bold"
-            or element.tag == "underline"
-        ):
-            return None
+        # elif (
+        #     # element.tag == "title"
+        #     # or element.tag == "label"
+        #     element.tag == "xref"
+        #     or element.tag == "italic"
+        #     or element.tag == "sup"
+        #     or element.tag == "sub"
+        #     or element.tag == "ext-link"
+        #     or element.tag == "supplementary-material"
+        #     or element.tag == "uri"
+        #     or element.tag == "bold"
+        #     or element.tag == "underline"
+        # ):
+        #     return None
 
         else:
             print(f"Skipping tag: {element.tag}")
+            raise Exception
             return None  # Skip unknown tags
