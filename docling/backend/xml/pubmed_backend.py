@@ -3,7 +3,8 @@ from io import BytesIO
 import os
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
+from docling.backend.html_backend import HTMLDocumentBackend
 from docling_core.types.doc import (
     DocItemLabel,
     DoclingDocument,
@@ -282,12 +283,8 @@ class PubMedDocumentBackend(DeclarativeDocumentBackend):
         parent_node: Optional[NodeItem],
     ) -> None:
 
-        label = (
-            table_xml_component["label"] if table_xml_component["label"] else "Table"
-        )
-        caption = (
-            table_xml_component["caption"] if table_xml_component["caption"] else ""
-        )
+        label = table_xml_component["label"] or "Table"
+        caption = table_xml_component["caption"] or ""
         table_caption = doc.add_text(
             label=DocItemLabel.CAPTION, text=label + ": " + caption
         )
@@ -295,66 +292,14 @@ class PubMedDocumentBackend(DeclarativeDocumentBackend):
         try:
             soup = BeautifulSoup(table_xml_component["content"], "html.parser")
             table_tag = soup.find("table")
-
-            nested_tables = table_tag.find("table")
-            if nested_tables:
-                _log.debug(f"Skipping nested table for: {str(self.file)}")
+            if not isinstance(table_tag, Tag):
                 return
 
-            # Count the number of rows (number of <tr> elements)
-            num_rows = len(table_tag.find_all("tr"))
+            data = HTMLDocumentBackend.parse_table_data(table_tag)
+            if data is None:
+                raise ValueError
 
-            # Find the number of columns (taking into account colspan)
-            num_cols = 0
-            for row in table_tag.find_all("tr"):
-                col_count = 0
-                for cell in row.find_all(["td", "th"]):
-                    colspan = int(cell.get("colspan", 1))
-                    col_count += colspan
-                num_cols = max(num_cols, col_count)
-
-            grid = [[None for _ in range(num_cols)] for _ in range(num_rows)]
-
-            data = TableData(num_rows=num_rows, num_cols=num_cols, table_cells=[])
-
-            # Iterate over the rows in the table
-            for row_idx, row in enumerate(table_tag.find_all("tr")):
-                # For each row, find all the column cells (both <td> and <th>)
-                cells = row.find_all(["td", "th"])
-
-                # Check if each cell in the row is a header -> means it is a column header
-                col_header = True
-                for j, html_cell in enumerate(cells):
-                    if html_cell.name == "td":
-                        col_header = False
-
-                # Extract and print the text content of each cell
-                col_idx = 0
-                for _, html_cell in enumerate(cells):
-                    text = html_cell.text
-
-                    col_span = int(html_cell.get("colspan", 1))
-                    row_span = int(html_cell.get("rowspan", 1))
-
-                    while grid[row_idx][col_idx] is not None:
-                        col_idx += 1
-                    for r in range(row_span):
-                        for c in range(col_span):
-                            grid[row_idx + r][col_idx + c] = text
-
-                    cell = TableCell(
-                        text=text,
-                        row_span=row_span,
-                        col_span=col_span,
-                        start_row_offset_idx=row_idx,
-                        end_row_offset_idx=row_idx + row_span,
-                        start_col_offset_idx=col_idx,
-                        end_col_offset_idx=col_idx + col_span,
-                        column_header=col_header,
-                        row_header=((not col_header) and html_cell.name == "th"),
-                    )
-                    data.table_cells.append(cell)
-        except IndexError:
+        except Exception:
             table_caption.parent = parent_node
             return table_caption
 
@@ -520,7 +465,11 @@ class PubMedDocumentBackend(DeclarativeDocumentBackend):
                 table["label"] = element.xpath("label")[0].text
 
             if table_content_node is not None:
-                self._add_table(doc, table, parent_node)
+                try:
+                    self._add_table(doc, table, parent_node)
+                except Exception:
+                    _log.warning(f"Skipping unsupported table in {str(self.file)}")
+                    pass
             else:  # Some table are actually a figure
                 table_caption = doc.add_text(
                     label=DocItemLabel.CAPTION,

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
+from docling.backend.xml.pubmed_backend import FigureCaption
 from docling_core.types.doc import (
     DocItemLabel,
     DoclingDocument,
@@ -13,6 +14,7 @@ from docling_core.types.doc import (
     GroupLabel,
     NodeItem,
     TextItem,
+    ImageRef,
 )
 from lxml import etree
 from typing_extensions import TypedDict, override
@@ -21,6 +23,8 @@ from docling.backend.abstract_backend import DeclarativeDocumentBackend
 from docling.backend.html_backend import HTMLDocumentBackend
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
+from PIL import Image
+
 
 _log = logging.getLogger(__name__)
 
@@ -160,9 +164,9 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
                 self._walk_linear(doc, self.root, body[0])
 
             # walk over the XML back matter
-            back = self.tree.xpath("//back")
-            if self.root and len(back) > 0:
-                self._walk_linear(doc, self.root, back[0])
+            # back = self.tree.xpath("//back")
+            # if self.root and len(back) > 0:
+            #     self._walk_linear(doc, self.root, back[0])
         except Exception:
             _log.error(traceback.format_exc())
 
@@ -170,21 +174,40 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
 
     @staticmethod
     def _get_text(node: etree._Element, sep: Optional[str] = None) -> str:
-        skip_tags = ["term", "disp-formula", "inline-formula"]
-        text: str = (
-            node.text.replace("\n", " ")
-            if (node.tag not in skip_tags and node.text)
-            else ""
-        )
-        for child in list(node):
-            if child.tag not in skip_tags:
-                # TODO: apply styling according to child.tag when supported by docling-core
-                text += JatsDocumentBackend._get_text(child, sep)
-            if sep:
-                text = text.rstrip(sep) + sep
-            text += child.tail.replace("\n", " ") if child.tail else ""
+        # skip_tags = ["term", "disp-formula", "inline-formula"]
+        # text: str = (
+        #     node.text.replace("\n", " ")
+        #     if (node.tag not in skip_tags and node.text)
+        #     else ""
+        # )
+        # for child in list(node):
+        #     if child.tag not in skip_tags:
+        #         # TODO: apply styling according to child.tag when supported by docling-core
+        #         text += JatsDocumentBackend._get_text(child, sep)
+        #     if sep:
+        #         text = text.rstrip(sep) + sep
+        #     text += child.tail.replace("\n", " ") if child.tail else ""
 
-        return text
+        soup = BeautifulSoup(etree.tostring(node), "xml")
+        formatted_paragraph = ""
+        for p in soup.find_all("p"):
+            for elem in p.children:
+                print(f"Elem: {elem}, ({elem.name})")
+
+                if elem.name is None:  # Plain text
+                    formatted_paragraph += elem
+                elif elem.name == "bold":  # Bold
+                    formatted_paragraph += f"**{elem.text}**"
+                elif elem.name == "italic":  # Italic
+                    formatted_paragraph += f"*{elem.text}*"
+                elif elem.name == "xref":  # Reference (keeps the number as is)
+                    formatted_paragraph += f"[{elem.text}]"
+                elif elem.name == "sub":  # Subscript
+                    formatted_paragraph += f"<sub>{elem.text}</sub>"
+                elif elem.name == "sup":  # Superscript
+                    formatted_paragraph += f"<sup>{elem.text}</sup>"
+
+        return formatted_paragraph
 
     def _find_metadata(self) -> Optional[etree._Element]:
         meta_names: list[str] = ["article-meta", "book-part-meta"]
@@ -301,17 +324,11 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         self, doc: DoclingDocument, xml_components: XMLComponents
     ) -> None:
 
-        for abstract in xml_components["abstract"]:
-            text: str = abstract["content"]
-            title: str = abstract["label"] or DEFAULT_HEADER_ABSTRACT
-            if not text:
-                continue
-            parent = doc.add_heading(parent=self.root, text=title)
-            doc.add_text(
-                parent=parent,
-                text=text,
-                label=DocItemLabel.TEXT,
-            )
+        abs_nodes = self.tree.xpath(".//abstract")
+        if len(abs_nodes) > 0:
+            abstract_parent = doc.add_heading(parent=self.root, text="Abstract")
+            for abs_node in abs_nodes:
+                self._walk_linear(doc, abstract_parent, abs_node)
 
         return
 
@@ -486,36 +503,45 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
 
         return
 
-    def _add_figure_captions(
+    def _add_figure(
         self, doc: DoclingDocument, parent: NodeItem, node: etree._Element
     ) -> None:
-        label_node = node.xpath("label")
-        label: Optional[str] = (
-            JatsDocumentBackend._get_text(label_node[0]).strip() if label_node else ""
-        )
 
-        caption_node = node.xpath("caption")
-        caption: Optional[str]
-        if len(caption_node) > 0:
+        figure_caption: FigureCaption = {
+            "caption": "",
+            "label": "",
+        }
+
+        # Label
+        if node.xpath("label"):
+            figure_caption["label"] = node.xpath("label")[0].text
+
+        # Caption
+        if node.xpath("caption"):
             caption = ""
-            for caption_par in list(caption_node[0]):
-                if caption_par.xpath(".//supplementary-material"):
-                    continue
-                caption += JatsDocumentBackend._get_text(caption_par).strip() + " "
-            caption = caption.strip()
-        else:
-            caption = None
+            for caption_node in node.xpath("caption")[0]:
+                caption += JatsDocumentBackend._get_text(caption_node).strip() + " "
+            figure_caption["caption"] = caption.strip()
 
-        # TODO: format label vs caption once styling is supported
-        fig_text: str = f"{label}{' ' if label and caption else ''}{caption}"
-        fig_caption: Optional[TextItem] = (
-            doc.add_text(label=DocItemLabel.CAPTION, text=fig_text)
-            if fig_text
-            else None
+        figure_caption_text = (
+            figure_caption["label"] + ": " + figure_caption["caption"].strip()
         )
+        fig_caption = doc.add_text(label=DocItemLabel.CAPTION, text=figure_caption_text)
 
-        doc.add_picture(parent=parent, caption=fig_caption)
+        graphic_el = node.xpath("graphic")
+        if len(graphic_el) > 0:
+            img_name: str = [
+                value for key, value in graphic_el[0].items() if key.endswith("href")
+            ][0]
 
+            fig_ref = ImageRef.from_pil(
+                image=Image.open(Path(self.file.parent, f"{img_name}.jpg")),
+                dpi=50,
+            )
+        else:
+            fig_ref = None
+
+        doc.add_picture(parent=parent, caption=fig_caption, image=fig_ref)
         return
 
     # TODO: add footnotes when DocItemLabel.FOOTNOTE and styling are supported
@@ -535,29 +561,33 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         return
 
     def _add_table(
-        self, doc: DoclingDocument, parent: NodeItem, table_xml_component: Table
+        self,
+        doc: DoclingDocument,
+        table_xml_component: Table,
+        parent_node: Optional[NodeItem],
     ) -> None:
-        soup = BeautifulSoup(table_xml_component["content"], "html.parser")
-        table_tag = soup.find("table")
-        if not isinstance(table_tag, Tag):
-            return
 
-        data = HTMLDocumentBackend.parse_table_data(table_tag)
-
-        # TODO: format label vs caption once styling is supported
-        label = table_xml_component["label"]
-        caption = table_xml_component["caption"]
-        table_text: str = f"{label}{' ' if label and caption else ''}{caption}"
-        table_caption: Optional[TextItem] = (
-            doc.add_text(label=DocItemLabel.CAPTION, text=table_text)
-            if table_text
-            else None
+        label = table_xml_component["label"] or "Table"
+        caption = table_xml_component["caption"] or ""
+        table_caption = doc.add_text(
+            label=DocItemLabel.CAPTION, text=label + ": " + caption
         )
 
-        if data is not None:
-            doc.add_table(data=data, parent=parent, caption=table_caption)
+        try:
+            soup = BeautifulSoup(table_xml_component["content"], "html.parser")
+            table_tag = soup.find("table")
+            if not isinstance(table_tag, Tag):
+                raise ValueError
 
-        return
+            data = HTMLDocumentBackend.parse_table_data(table_tag)
+            if data is None:
+                raise ValueError
+
+        except Exception:
+            table_caption.parent = parent_node
+            return
+
+        doc.add_table(data=data, parent=parent_node, caption=table_caption)
 
     def _add_tables(
         self, doc: DoclingDocument, parent: NodeItem, node: etree._Element
@@ -571,34 +601,49 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             table_content_node = node.xpath("alternatives/table")[0]
         else:
             table_content_node = None
+
         if table_content_node is not None:
             table["content"] = etree.tostring(table_content_node).decode("utf-8")
 
         # Caption
-        caption_node = node.xpath("caption")
-        caption: Optional[str]
-        if caption_node:
-            caption = ""
-            for caption_par in list(caption_node[0]):
-                if caption_par.xpath(".//supplementary-material"):
-                    continue
-                caption += JatsDocumentBackend._get_text(caption_par).strip() + " "
-            caption = caption.strip()
+        if len(node.xpath("caption/p")) > 0:
+            caption_node = node.xpath("caption/p")[0]
+        elif len(node.xpath("caption/title")) > 0:
+            caption_node = node.xpath("caption/title")[0]
         else:
-            caption = None
-        if caption is not None:
-            table["caption"] = caption
+            caption_node = None
+        if caption_node is not None:
+            table["caption"] = "".join(
+                [t.replace("\n", "") for t in caption_node.itertext()]
+            )
 
         # Label
         if len(node.xpath("label")) > 0:
             table["label"] = node.xpath("label")[0].text
 
-        try:
-            self._add_table(doc, parent, table)
-        except Exception as e:
-            _log.warning(f"Skipping unsupported table in {str(self.file)}")
-            pass
+        if table_content_node is not None:
+            try:
+                self._add_table(doc, table, parent)
+            except Exception:
+                _log.warning(f"Skipping unsupported table in {str(self.file)}")
+                pass
+        else:  # Some table are actually a figure
+            table_caption = doc.add_text(
+                label=DocItemLabel.CAPTION,
+                text=table["label"] + ": " + table["caption"],
+            )
 
+            graphic_el = node.xpath("graphic")
+            img_name: str = [
+                value for key, value in graphic_el[0].items() if key.endswith("href")
+            ][0]
+
+            fig_ref = ImageRef.from_pil(
+                image=Image.open(Path(self.file.parent, f"{img_name}.jpg")),
+                dpi=50,
+            )
+
+            doc.add_picture(parent=parent, caption=table_caption, image=fig_ref)
         return
 
     def _add_title(self, doc: DoclingDocument, xml_components: XMLComponents) -> None:
@@ -633,12 +678,19 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
 
             # add elements and decide whether to stop walking
             if child.tag in ("sec", "ack"):
-                header = child.xpath("title|label")
+                # header = child.xpath("title|label")
+
+                title_el = child.find("title")
+                title_label = child.find("label")
+
+                title_label_text = "" if title_label is None else title_label.text
+
                 text: Optional[str] = None
-                if len(header) > 0:
-                    text = JatsDocumentBackend._get_text(header[0])
-                elif child.tag == "ack":
+                if title_el is not None:
+                    text = f"{title_label_text} {title_el.text}"
+                if text is None and child.tag == "ack":
                     text = DEFAULT_HEADER_ACKNOWLEDGMENTS
+
                 if text:
                     new_parent = doc.add_heading(text=text, parent=parent)
             elif child.tag == "list":
@@ -652,7 +704,7 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
                 new_parent = doc.add_list_item(text=text, parent=parent)
                 stop_walk = True
             elif child.tag == "fig":
-                self._add_figure_captions(doc, parent, child)
+                self._add_figure(doc, parent, child)
                 stop_walk = True
             elif child.tag == "table-wrap":
                 self._add_tables(doc, parent, child)
