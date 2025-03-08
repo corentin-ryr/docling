@@ -540,6 +540,7 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             )
         else:
             fig_ref = None
+            raise Exception
 
         doc.add_picture(parent=parent, caption=fig_caption, image=fig_ref)
         return

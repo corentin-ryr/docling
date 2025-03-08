@@ -5,7 +5,7 @@ from typing import Iterable, Optional, Union
 
 import numpy
 from docling_core.types.doc import BoundingBox, DocItemLabel, TableCell
-from docling_ibm_models.tableformer.data_management.tf_predictor import TFPredictor
+# from docling_ibm_models.tableformer.data_management.tf_predictor import TFPredictor
 from PIL import ImageDraw
 
 from docling.datamodel.base_models import Page, Table, TableStructurePrediction

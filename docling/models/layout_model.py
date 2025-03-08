@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 from docling_core.types.doc import DocItemLabel
-from docling_ibm_models.layoutmodel.layout_predictor import LayoutPredictor
+# from docling_ibm_models.layoutmodel.layout_predictor import LayoutPredictor
 from PIL import Image
 
 from docling.datamodel.base_models import BoundingBox, Cluster, LayoutPrediction, Page
