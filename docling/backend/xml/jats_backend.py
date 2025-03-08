@@ -2,7 +2,7 @@ import logging
 import traceback
 from io import BytesIO
 from pathlib import Path
-from typing import Final, Optional, Union
+from typing import Final, Optional, Union, Dict
 
 from bs4 import BeautifulSoup, Tag
 from docling.backend.xml.pubmed_backend import FigureCaption
@@ -158,10 +158,12 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             # Add metadata to the document
             self._add_metadata(doc, xml_components)
 
+            floating_figs:Dict = self._get_floating_figures()
+
             # walk over the XML body
             body = self.tree.xpath("//body")
             if self.root and len(body) > 0:
-                self._walk_linear(doc, self.root, body[0])
+                self._walk_linear(doc, self.root, body[0], floating_figs=floating_figs)
 
             # walk over the XML back matter
             # back = self.tree.xpath("//back")
@@ -171,6 +173,16 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             _log.error(traceback.format_exc())
 
         return doc
+    
+    def _get_floating_figures(self) -> list[etree._Element]:
+        floating_figs = {} # Fig tag to fig element
+        # Find all the fig element inside the <floats-group> element
+        floats_group = self.tree.xpath("//floats-group")
+        if len(floats_group) > 0:
+            for fig in floats_group[0].xpath(".//fig"):
+                floating_figs[fig.get("id")] = fig
+
+        return floating_figs
 
     @staticmethod
     def _get_text(node: etree._Element, sep: Optional[str] = None) -> str:
@@ -192,8 +204,6 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         formatted_paragraph = ""
         for p in soup.find_all("p"):
             for elem in p.children:
-                print(f"Elem: {elem}, ({elem.name})")
-
                 if elem.name is None:  # Plain text
                     formatted_paragraph += elem
                 elif elem.name == "bold":  # Bold
@@ -540,7 +550,6 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             )
         else:
             fig_ref = None
-            raise Exception
 
         doc.add_picture(parent=parent, caption=fig_caption, image=fig_ref)
         return
@@ -656,7 +665,7 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         return
 
     def _walk_linear(
-        self, doc: DoclingDocument, parent: NodeItem, node: etree._Element
+        self, doc: DoclingDocument, parent: NodeItem, node: etree._Element, floating_figs:Dict = {}
     ) -> str:
         skip_tags = ["term"]
         flush_tags = ["ack", "sec", "list", "boxed-text", "disp-formula", "fig"]
@@ -744,10 +753,31 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             elif child.tag == "inline-formula":
                 # TODO: address inline formulas when supported by docling-core
                 stop_walk = True
+            elif child.tag == "bold":  # Bold
+                node_text += f"**{child.text}**"
+                stop_walk = True
+            elif child.tag == "italic":  # Italic
+                node_text += f"*{child.text}*"
+                stop_walk = True
+            elif child.tag == "xref":  # Reference (keeps the number as is)
+                node_text += f"[{child.text}]"
+                # If the reference is a figure, add the figure
+                if child.get("ref-type") == "fig":
+                    fig_id = child.get("rid")
+                    if fig_id in floating_figs:
+                        self._add_figure(doc, parent, floating_figs[fig_id])
+                        floating_figs.pop(fig_id)
+                stop_walk = True
+            elif child.tag == "sub":  # Subscript
+                node_text += f"<sub>{child.text}</sub>"
+                stop_walk = True
+            elif child.tag == "sup":  # Superscript
+                node_text += f"<sup>{child.text}</sup>"
+                stop_walk = True
 
             # step into child
             if not stop_walk:
-                new_text = self._walk_linear(doc, new_parent, child)
+                new_text = self._walk_linear(doc, new_parent, child, floating_figs=floating_figs)
                 if not (node.getparent().tag == "p" and node.tag in flush_tags):
                     node_text += new_text
 
