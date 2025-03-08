@@ -158,7 +158,7 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             # Add metadata to the document
             self._add_metadata(doc, xml_components)
 
-            floating_figs:Dict = self._get_floating_figures()
+            floating_figs: Dict = self._get_floating_figures()
 
             # walk over the XML body
             body = self.tree.xpath("//body")
@@ -173,9 +173,9 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
             _log.error(traceback.format_exc())
 
         return doc
-    
+
     def _get_floating_figures(self) -> list[etree._Element]:
-        floating_figs = {} # Fig tag to fig element
+        floating_figs = {}  # Fig tag to fig element
         # Find all the fig element inside the <floats-group> element
         floats_group = self.tree.xpath("//floats-group")
         if len(floats_group) > 0:
@@ -287,12 +287,14 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
                 if id in affiliation_ids_names:
                     author["affiliation_names"].append(affiliation_ids_names[id])
 
-            # Name
-            author["name"] = (
-                author_node.xpath("name/given-names")[0].text
-                + " "
-                + author_node.xpath("name/surname")[0].text
-            )
+            surnames = author_node.xpath("name/surname")
+            given_names = author_node.xpath("name/given-names")
+
+            if len(surnames) > 0 and len(given_names) > 0:
+                given_name = given_names[0].text
+                author["name"] = (
+                    surnames[0].text + " " + given_name if given_name else ""
+                )
 
             authors.append(author)
 
@@ -665,7 +667,11 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         return
 
     def _walk_linear(
-        self, doc: DoclingDocument, parent: NodeItem, node: etree._Element, floating_figs:Dict = {}
+        self,
+        doc: DoclingDocument,
+        parent: NodeItem,
+        node: etree._Element,
+        floating_figs: Dict = {},
     ) -> str:
         skip_tags = ["term"]
         flush_tags = ["ack", "sec", "list", "boxed-text", "disp-formula", "fig"]
@@ -777,7 +783,9 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
 
             # step into child
             if not stop_walk:
-                new_text = self._walk_linear(doc, new_parent, child, floating_figs=floating_figs)
+                new_text = self._walk_linear(
+                    doc, new_parent, child, floating_figs=floating_figs
+                )
                 if not (node.getparent().tag == "p" and node.tag in flush_tags):
                     node_text += new_text
 
