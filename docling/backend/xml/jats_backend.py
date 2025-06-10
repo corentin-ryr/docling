@@ -567,7 +567,7 @@ class JatsDocumentBackend(DeclarativeDocumentBackend):
         self, doc: DoclingDocument, xml_components: XMLComponents
     ) -> None:
         self._add_title(doc, xml_components)
-        self._add_authors(doc, xml_components)
+        # self._add_authors(doc, xml_components)
         self._add_abstract(doc, xml_components)
 
         return
